@@ -1,0 +1,10 @@
+# Local / personal data: never in the repository
+captures/
+logs/
+calibration.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
