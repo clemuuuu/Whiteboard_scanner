@@ -17,9 +17,13 @@ python -m venv ~/.venvs/whiteboard
 ~/.venvs/whiteboard/bin/pip install -r requirements.txt
 ```
 
+Optional: `wl-clipboard` (Wayland) or `xclip` (X11) for the `y` key, and
+`notify-send` for notifications.
+
 On the phone: **IP Webcam** (Android, stream at `http://PHONE_IP:8080/video`)
 or **DroidCam** (`http://PHONE_IP:4747/video`). The phone and the PC must be on
-the same Wi-Fi network.
+the same Wi-Fi network. If the phone gets a new address, the script finds it
+again on its own (same port and path, local network scanned in ~1 s).
 
 ## Usage
 
@@ -32,12 +36,27 @@ XWayland on Wayland) and copies all output to `logs/`. Use another venv with
 `WHITEBOARD_VENV=/path/to/venv`. The launcher is a Bash script tested on Linux
 (Wayland); elsewhere, run `python whiteboard.py …` directly.
 
+To launch it from an app menu, create
+`~/.local/share/applications/whiteboard-scanner.desktop`:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Whiteboard scanner
+Exec=/path/to/whiteboard.sh http://PHONE_IP:8080/video --size 120x90
+Icon=camera-web
+Terminal=false
+```
+
+Errors (phone unreachable…) then show up as a notification.
+
 On first launch, click the **4 corners of the white area** of the board, then
 press **Enter**. The calibration is kept for the next sessions.
 
 | Key      | Action |
 |----------|--------|
 | `s`      | capture (always kept) |
+| `y`      | capture and copy the board to the clipboard (paste it in a chat, a document…) |
 | `v`      | view: stabilized board / live cleaned / raw camera |
 | `c`      | recalibrate (click the 4 corners again; `q` cancels and keeps the old ones) |
 | `r`      | reset the stabilized board |

@@ -120,6 +120,42 @@ check("brief shift (0.5 s) triggers nothing",
       all(m.check(f) == "ok" for f in [shifted, shifted, room, room, room]))
 check("black frame detected", wb.CameraMonitor().check(np.zeros_like(room) + 10) == "black")
 
+# phone found again after an address change
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class FakePhone(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/video" else 404)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+class OtherDevice(FakePhone):  # same port, but a web page, not a stream
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+
+
+other = HTTPServer(("127.0.0.3", 0), OtherDevice)
+port = other.server_address[1]
+phone = HTTPServer(("127.0.0.5", port), FakePhone)
+for srv in (other, phone):
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = f"http://127.0.0.5:{port}/video"
+check("phone answering: address kept", wb.find_stream(url) == url)
+check("phone moved to a new address: found again",
+      wb.find_stream(f"http://127.0.0.9:{port}/video") == url)
+check("nothing streaming: address given back unchanged",
+      wb.find_stream(f"http://127.0.0.9:{port}/nothing") == f"http://127.0.0.9:{port}/nothing")
+for srv in (other, phone):
+    srv.shutdown()
+
 t0 = time.time()
 for _ in range(10):
     c, r = process(room)

@@ -12,6 +12,7 @@ Usage:
 
 Keys (in the window):
     s         save now
+    y         save now and copy the board to the clipboard (paste it anywhere)
     v         switch view: stabilized board / live cleaned / raw camera
     c         recalibrate (click the 4 corners again)
     r         reset the stabilized board
@@ -19,13 +20,20 @@ Keys (in the window):
 """
 
 import argparse
+import base64
+import http.client
 import json
 import os
+import shutil
+import socket
+import subprocess
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 # dropped network stream -> read() gives up after 5 s instead of blocking
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rw_timeout;5000000")
@@ -107,6 +115,71 @@ class Stream:
         self.running = False
         self.thread.join(timeout=1)
         self.cap.release()
+
+
+# ---------------------------------------------------------------------------
+# Finding the phone again when its address changed (new DHCP lease)
+# ---------------------------------------------------------------------------
+def is_stream(host, port, target, auth=None, timeout=1.5):
+    """True if http://host:port/target answers with images (MJPEG or video)."""
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        conn.request("GET", target, headers={"Authorization": auth} if auth else {})
+        resp = conn.getresponse()
+        kind = resp.getheader("Content-Type", "")
+        return resp.status == 200 and kind.startswith(("multipart/", "image/", "video/"))
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+def port_open(host, port, timeout=0.5):
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def find_stream(url):
+    """
+    Return `url` if it answers; otherwise look for the same port and path on
+    the other addresses of the local network (/24) and return the first one
+    that streams images. Gives `url` back unchanged if nothing is found.
+    """
+    u = urlsplit(url)
+    if u.scheme != "http" or not u.hostname:
+        return url
+    port = u.port or 80
+    target = u.path + ("?" + u.query if u.query else "") or "/"
+    auth = None
+    if u.username:
+        creds = f"{unquote(u.username)}:{unquote(u.password or '')}"
+        auth = "Basic " + base64.b64encode(creds.encode()).decode()
+    if is_stream(u.hostname, port, target, auth):
+        return url
+
+    print(f"{u.hostname}:{port} does not answer, searching the local network...")
+    try:  # the PC's own address on the route to the phone (no packet sent)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((u.hostname, port))
+            own = s.getsockname()[0]
+    except OSError:
+        return url
+    prefix = own.rsplit(".", 1)[0]
+    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
+    hosts = [h for h in hosts if h not in (own, u.hostname)]
+    with ThreadPoolExecutor(128) as pool:
+        listening = [h for h, ok in zip(hosts, pool.map(lambda h: port_open(h, port), hosts)) if ok]
+    for host in listening:
+        if is_stream(host, port, target, auth):
+            userinfo, at, _ = u.netloc.rpartition("@")
+            new = u._replace(netloc=f"{userinfo}{at}{host}:{port}").geturl()
+            print(f"Phone found at {new}")
+            return new
+    print("Phone not found on the network: is the camera app started?")
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +482,7 @@ class Captures:
             oldest = autos.pop(0)
             oldest.unlink(missing_ok=True)
             self.files.remove((oldest, True))
+        return name
 
     def has_changed(self, img, min_fraction=0.002):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -430,6 +504,23 @@ class Captures:
         pdf = self.folder / "session.pdf"
         pages[0].save(pdf, save_all=True, append_images=pages[1:])
         print(f"[pdf] {pdf}")
+
+
+def copy_to_clipboard(png):
+    """Put a PNG file in the clipboard (wl-copy on Wayland, xclip on X11)."""
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        cmd = ["wl-copy", "--type", "image/png"]
+    elif shutil.which("xclip"):
+        cmd = ["xclip", "-selection", "clipboard", "-t", "image/png"]
+    else:
+        print("No clipboard tool: install wl-clipboard (Wayland) or xclip (X11).")
+        return False
+    with open(png, "rb") as f:
+        ok = subprocess.run(cmd, stdin=f).returncode == 0
+    print("[clipboard] board copied" if ok else "[clipboard] copy failed")
+    if ok and shutil.which("notify-send"):
+        subprocess.Popen(["notify-send", "-t", "2000", "Whiteboard", "Board copied to the clipboard"])
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +564,7 @@ def main():
                     help="displayed frames/s (default 10; lower = cooler PC)")
     args = ap.parse_args()
 
-    source = int(args.source) if args.source.isdigit() else args.source
+    source = int(args.source) if args.source.isdigit() else find_stream(args.source)
     width_cm, height_cm = args.size
     W = args.width
     H = int(round(W * height_cm / width_cm))
@@ -531,6 +622,8 @@ def main():
                 break
             elif k == ord("s") and board.board is not None:
                 captures.save(board.board)
+            elif k == ord("y") and board.board is not None:
+                copy_to_clipboard(captures.save(board.board))
             elif k == ord("v"):
                 view = (view + 1) % len(views)
             elif k == ord("r"):
@@ -557,7 +650,7 @@ def main():
                 cv2.polylines(disp, [corners.astype(np.int32)], True, (0, 0, 255), 3)
             n_manual = sum(not a for _, a in captures.files)
             info = (f"view: {views[view]} | captures: {n_manual} (s) + "
-                    f"{len(captures.files) - n_manual} auto | s v c r q")
+                    f"{len(captures.files) - n_manual} auto | s y v c r q")
             cv2.putText(disp, info, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 5)
             cv2.putText(disp, info, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 60, 0), 2)
             if state != "ok":

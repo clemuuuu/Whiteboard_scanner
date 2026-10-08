@@ -13,5 +13,9 @@ QT_QPA_PLATFORM=xcb PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 \
     | grep --line-buffered -v -e 'QFontDatabase' -e 'Qt no longer ships fonts' -e '^\[mjpeg @' \
     | tee "$log"
 code=${PIPESTATUS[0]}
+# launched from an app menu there is no terminal: show errors as a notification
+if [ "$code" -ne 0 ] && command -v notify-send >/dev/null; then
+    notify-send -u critical "Whiteboard scanner" "$(tail -n 3 "$log")"
+fi
 echo "[end] exit code $code" | tee -a "$log"
 exit "$code"
