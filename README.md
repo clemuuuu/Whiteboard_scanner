@@ -95,3 +95,7 @@ python tests/test_whiteboard.py
 Tests on simulated frames (~1 min): person standing in front of the ink, long
 writing session with a still torso, erasing, moved phone, black frame… Must
 end with `ALL OK`.
+
+## License
+
+[MIT](LICENSE)
