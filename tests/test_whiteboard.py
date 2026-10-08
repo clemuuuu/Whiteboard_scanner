@@ -115,8 +115,9 @@ check("moved phone detected", [m.check(shifted) for _ in range(5)][-1] == "moved
 check("warning clears when the shift is gone", [m.check(room) for _ in range(5)][-1] == "ok")
 m = wb.CameraMonitor()
 m.reset(room)
-_ = [m.check(shifted) for _ in range(2)]
-check("brief shift (0.5 s) triggers nothing", m.check(room) == "ok")
+_ = [m.check(room) for _ in range(4)]  # history full: detection is armed
+check("brief shift (0.5 s) triggers nothing",
+      all(m.check(f) == "ok" for f in [shifted, shifted, room, room, room]))
 check("black frame detected", wb.CameraMonitor().check(np.zeros_like(room) + 10) == "black")
 
 t0 = time.time()

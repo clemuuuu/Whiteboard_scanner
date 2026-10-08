@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-whiteboard.py — Scan / stream a whiteboard with your phone.
+whiteboard.py — Scan a whiteboard with your phone camera.
 
 The phone streams its camera over Wi-Fi (IP Webcam or DroidCam app);
 this script grabs the stream on the PC, rectifies the board, cleans the
@@ -121,7 +121,9 @@ def order_corners(pts):
                      pts[np.argmax(s)], pts[np.argmax(d)]], dtype=np.float32)
 
 
-def calibrate(stream):
+def calibrate(stream, cancellable=False):
+    """Click the 4 corners. Returns them, or None if cancelled (q/Esc) when
+    `cancellable` (recalibration: the previous corners are kept)."""
     pts = []
 
     def click(event, x, y, flags, param):
@@ -144,6 +146,8 @@ def calibrate(stream):
             cv2.polylines(disp, [np.array(pts, np.int32)], len(pts) == 4, (0, 0, 255), 3)
         msg = (f"Click the 4 corners of the board ({len(pts)}/4) - u: undo"
                if len(pts) < 4 else "Enter/Space: confirm - u: undo")
+        if cancellable:
+            msg += " - q: cancel"
         cv2.putText(disp, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 5)
         cv2.putText(disp, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
         cv2.imshow(WINDOW, disp)
@@ -153,6 +157,10 @@ def calibrate(stream):
         elif k in (13, 32) and len(pts) == 4:
             break
         elif k in (ord("q"), 27):
+            cv2.setMouseCallback(WINDOW, lambda *a: None)
+            if cancellable:
+                print("Recalibration cancelled, previous corners kept.")
+                return None
             raise SystemExit("Calibration cancelled.")
     cv2.setMouseCallback(WINDOW, lambda *a: None)
     corners = order_corners(pts)
@@ -425,11 +433,29 @@ class Captures:
 
 
 # ---------------------------------------------------------------------------
+def board_size(text):
+    """argparse type for --size: 'WxH' in cm, e.g. 120x90."""
+    try:
+        w, h = (float(x) for x in text.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected WxH in cm (e.g. 120x90), got {text!r}")
+    if w <= 0 or h <= 0:
+        raise argparse.ArgumentTypeError("width and height must be positive")
+    return w, h
+
+
+def non_negative_int(text):
+    n = int(text)
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser(description="Whiteboard scanner using a phone camera")
     ap.add_argument("source", help="stream URL (e.g. http://PHONE_IP:8080/video) "
                                    "or webcam number (0, 1...)")
-    ap.add_argument("--size", default="120x90",
+    ap.add_argument("--size", type=board_size, default="120x90",
                     help="board dimensions in cm, WxH (default 120x90)")
     ap.add_argument("--width", type=int, default=1600,
                     help="width of the rectified image in pixels (default 1600)")
@@ -440,7 +466,7 @@ def main():
     ap.add_argument("--freeze-if-moved", action="store_true",
                     help="freeze the board when the phone seems to have moved "
                          "(default: warning only)")
-    ap.add_argument("--max-auto", type=int, default=3,
+    ap.add_argument("--max-auto", type=non_negative_int, default=3,
                     help="automatic captures kept (most recent, default 3); "
                          "manual captures (s) are all kept")
     ap.add_argument("--fps", type=float, default=10,
@@ -448,7 +474,7 @@ def main():
     args = ap.parse_args()
 
     source = int(args.source) if args.source.isdigit() else args.source
-    width_cm, height_cm = (float(x) for x in args.size.lower().split("x"))
+    width_cm, height_cm = args.size
     W = args.width
     H = int(round(W * height_cm / width_cm))
     target = np.array([[0, 0], [W - 1, 0], [W - 1, H - 1], [0, H - 1]], dtype=np.float32)
@@ -511,10 +537,12 @@ def main():
                 board.reset()
                 monitor.reset(f)
             elif k == ord("c"):
-                corners = calibrate(stream)
-                M = cv2.getPerspectiveTransform(corners, target)
-                board.reset()
-                monitor.reset(stream.read())
+                new_corners = calibrate(stream, cancellable=True)
+                if new_corners is not None:
+                    corners = new_corners
+                    M = cv2.getPerspectiveTransform(corners, target)
+                    board.reset()
+                    monitor.reset(stream.read())
 
             # Display: capped at --fps frames/s (immediate after a key press)
             if now - last_display < 1.0 / args.fps and k == 0xFF:

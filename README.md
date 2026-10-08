@@ -29,8 +29,8 @@ the same Wi-Fi network.
 
 `whiteboard.sh` runs the script in the right environment (venv, window through
 XWayland on Wayland) and copies all output to `logs/`. Use another venv with
-`WHITEBOARD_VENV=/path/to/venv`. The script can also be run directly with
-`python whiteboard.py …`.
+`WHITEBOARD_VENV=/path/to/venv`. The launcher is a Bash script tested on Linux
+(Wayland); elsewhere, run `python whiteboard.py …` directly.
 
 On first launch, click the **4 corners of the white area** of the board, then
 press **Enter**. The calibration is kept for the next sessions.
@@ -39,7 +39,7 @@ press **Enter**. The calibration is kept for the next sessions.
 |----------|--------|
 | `s`      | capture (always kept) |
 | `v`      | view: stabilized board / live cleaned / raw camera |
-| `c`      | recalibrate (click the 4 corners again) |
+| `c`      | recalibrate (click the 4 corners again; `q` cancels and keeps the old ones) |
 | `r`      | reset the stabilized board |
 | `q`, Esc | quit (writes the session PDF) |
 
